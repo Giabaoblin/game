@@ -86,12 +86,20 @@ export const GarageView: React.FC<GarageViewProps> = ({
     ring.position.y = 0.01;
     scene.add(ring);
 
-    // Build Current Vehicle Mesh
-    const { root } = buildPlayerVehicleMesh(selectedVehicle.modelType, {
-      primary: selectedVehicle.paintColor,
-      accent: selectedVehicle.accentColor,
-      neon: selectedVehicle.neonColor,
-    });
+    // Build Current Vehicle Mesh with mounted equipped guns
+    const equippedPrimary = profile.weapons.find((w) => w.id === profile.equippedPrimaryId);
+    const equippedSecondary = profile.weapons.find((w) => w.id === profile.equippedSecondaryId);
+
+    const { root } = buildPlayerVehicleMesh(
+      selectedVehicle.modelType,
+      {
+        primary: selectedVehicle.paintColor,
+        accent: selectedVehicle.accentColor,
+        neon: selectedVehicle.neonColor,
+      },
+      equippedPrimary?.category || 'minigun',
+      equippedSecondary?.category || 'missile'
+    );
     vehicleGroupRef.current = root;
     scene.add(root);
 
@@ -133,7 +141,14 @@ export const GarageView: React.FC<GarageViewProps> = ({
       renderer.dispose();
       container.innerHTML = '';
     };
-  }, [selectedVehicle.id, selectedVehicle.paintColor, selectedVehicle.accentColor, selectedVehicle.neonColor]);
+  }, [
+    selectedVehicle.id,
+    selectedVehicle.paintColor,
+    selectedVehicle.accentColor,
+    selectedVehicle.neonColor,
+    profile.equippedPrimaryId,
+    profile.equippedSecondaryId,
+  ]);
 
   const currentStats = calculateVehicleActualStats(selectedVehicle);
   const isUnlocked = selectedVehicle.price === 0 || profile.level >= selectedVehicle.unlockLevel;

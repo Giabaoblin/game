@@ -69,6 +69,7 @@ export class RoadWarsEngine {
   private playerGroup: THREE.Group;
   private playerWheels: THREE.Group[] = [];
   private playerTurret?: THREE.Group;
+  private turretBarrels?: THREE.Group;
   private playerStats: ReturnType<typeof calculateVehicleActualStats>;
   private primaryStats: ReturnType<typeof calculateWeaponActualStats>;
   private secondaryStats: ReturnType<typeof calculateWeaponActualStats>;
@@ -176,15 +177,21 @@ export class RoadWarsEngine {
     // 4. Environment
     this.envManager = new EnvironmentManager(this.scene, zone.theme);
 
-    // 5. Build player vehicle mesh
-    const pMesh = buildPlayerVehicleMesh(vehicle.modelType, {
-      primary: vehicle.paintColor,
-      accent: vehicle.accentColor,
-      neon: vehicle.neonColor,
-    });
+    // 5. Build player vehicle mesh with visually mounted weapon arsenal
+    const pMesh = buildPlayerVehicleMesh(
+      vehicle.modelType,
+      {
+        primary: vehicle.paintColor,
+        accent: vehicle.accentColor,
+        neon: vehicle.neonColor,
+      },
+      primaryWeapon.category,
+      secondaryWeapon.category
+    );
     this.playerGroup = pMesh.root;
     this.playerWheels = pMesh.wheels;
     this.playerTurret = pMesh.frontTurret;
+    this.turretBarrels = pMesh.turretBarrels;
     this.scene.add(this.playerGroup);
 
     // 6. Spawn boss or escort if mission requires
@@ -567,7 +574,22 @@ export class RoadWarsEngine {
   }
 
   private firePrimaryWeapon() {
-    const muzzlePos = new THREE.Vector3(this.playerX, 1.1, this.playerZ + 2.0);
+    const muzzlePos = new THREE.Vector3(this.playerX, 1.25, this.playerZ + 2.2);
+
+    // Spin minigun barrels if mounted
+    if (this.turretBarrels) {
+      this.turretBarrels.rotation.z += 1.4;
+    }
+
+    // Gun muzzle flash particle
+    const flashColor = this.primaryWeapon.category === 'plasma' ? 0x06b6d4 : 0xfef08a;
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 6, 6),
+      new THREE.MeshBasicMaterial({ color: flashColor })
+    );
+    flash.position.copy(muzzlePos);
+    this.scene.add(flash);
+    setTimeout(() => this.scene.remove(flash), 40);
 
     switch (this.primaryWeapon.category) {
       case 'shotgun': {
