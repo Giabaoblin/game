@@ -35,7 +35,10 @@ export interface Particle {
   velocity: THREE.Vector3;
   lifetime: number;
   maxLifetime: number;
-  fade: boolean;
+  fade?: boolean;
+  gravity?: number;
+  rotationSpeed?: THREE.Vector3;
+  scaleSpeed?: number;
 }
 
 export interface AIEnemy {
@@ -48,6 +51,7 @@ export interface AIEnemy {
   targetLaneX: number;
   shootCooldown: number;
   active: boolean;
+  ramCooldown?: number;
 }
 
 export class RoadWarsEngine {
@@ -108,6 +112,7 @@ export class RoadWarsEngine {
   private bossMaxHealth: number = 0;
   private bossActive: boolean = false;
   private bossAttackCooldown: number = 0;
+  private bossRamCooldown: number = 0;
   private escortMesh?: THREE.Group;
   private escortHealth: number = 300;
 
@@ -895,6 +900,11 @@ export class RoadWarsEngine {
       const targetX = e.targetLaneX;
       e.mesh.position.x += (targetX - e.mesh.position.x) * dt * 2;
 
+      // Decrease ram cooldown
+      if (e.ramCooldown && e.ramCooldown > 0) {
+        e.ramCooldown -= dt;
+      }
+
       // Kamikaze drone accelerates toward player
       if (e.type === 'kamikaze') {
         const toPlayerX = this.playerX - e.mesh.position.x;
@@ -903,6 +913,8 @@ export class RoadWarsEngine {
 
         // Suicide Ram
         if (e.mesh.position.distanceTo(this.playerGroup.position) < 2.5) {
+          soundManager.playCrash(1.5);
+          this.cameraShakeIntensity = 0.7;
           this.damagePlayer(50);
           this.damageEnemy(e, 999);
         }
@@ -920,6 +932,71 @@ export class RoadWarsEngine {
         // Random lane change
         if (Math.random() < 0.008) {
           e.targetLaneX = (Math.floor(Math.random() * 4) - 1.5) * laneWidth;
+        }
+
+        // --- VEHICLE-TO-VEHICLE RAMMING & CRASH SYSTEM ---
+        const dx = Math.abs(this.playerX - e.mesh.position.x);
+        const dz = Math.abs(this.playerZ - e.mesh.position.z);
+        const hitWidth = e.type === 'heavy' || e.type === 'convoy_unit' ? 2.3 : 1.9;
+        const hitLength = e.type === 'heavy' || e.type === 'convoy_unit' ? 4.0 : 3.4;
+
+        if (dx < hitWidth && dz < hitLength && e.active) {
+          if (!e.ramCooldown || e.ramCooldown <= 0) {
+            e.ramCooldown = 0.35; // Cooldown between impact ticks
+
+            const playerSpeedKmh = Math.max(25, Math.abs(this.currentSpeed));
+            const enemySpeedKmh = e.speed * 3.6;
+            const relSpeed = Math.abs(playerSpeedKmh - enemySpeedKmh);
+
+            // Impact kinetic force multiplier
+            const impactForce = Math.min(2.5, Math.max(0.7, (playerSpeedKmh + relSpeed * 0.5) / 85));
+            const boostMultiplier = this.isBoosting ? 2.2 : 1.0;
+            const playerArmorFactor = Math.max(0.7, this.playerStats.armor / 25);
+
+            const enemyToughnessMap: Record<string, number> = {
+              buggy: 0.75,
+              patrol: 1.0,
+              heavy: 1.8,
+              vip: 1.4,
+              convoy_unit: 2.2,
+            };
+            const enemyToughness = enemyToughnessMap[e.type] || 1.0;
+
+            // Damage inflicted on enemy by player's ram
+            const ramDamageToEnemy = Math.round(
+              (42 * impactForce * boostMultiplier * playerArmorFactor) / enemyToughness
+            );
+
+            // Damage taken by player from the violent crash
+            const crashDamageToPlayer = Math.round(
+              (22 * impactForce * enemyToughness) / playerArmorFactor
+            );
+
+            // Sound, camera shake, and kinetic feedback
+            soundManager.playCrash(impactForce);
+            this.cameraShakeIntensity = Math.min(0.85, 0.4 * impactForce);
+
+            // Lateral and longitudinal rebound
+            const knockDir = Math.sign(e.mesh.position.x - this.playerX) || (Math.random() > 0.5 ? 1 : -1);
+            e.mesh.position.x += knockDir * (2.2 * impactForce);
+            e.targetLaneX = e.mesh.position.x;
+            this.playerX -= knockDir * (0.9 * impactForce);
+
+            // Kinetic friction deceleration
+            this.currentSpeed = Math.max(20, this.currentSpeed * 0.82);
+
+            // Hot metal friction sparks
+            const contactPoint = new THREE.Vector3(
+              (this.playerX + e.mesh.position.x) / 2,
+              0.55,
+              (this.playerZ + e.mesh.position.z) / 2
+            );
+            this.spawnSparks(contactPoint, 16);
+
+            // Deal mutual damage!
+            this.damagePlayer(crashDamageToPlayer);
+            this.damageEnemy(e, ramDamageToEnemy);
+          }
         }
       }
 
@@ -994,6 +1071,24 @@ export class RoadWarsEngine {
     if (this.bossAttackCooldown <= 0) {
       this.executeBossAttack();
       this.bossAttackCooldown = 2.8;
+    }
+
+    // Check player ramming into Boss
+    const dx = Math.abs(this.playerX - this.bossGroup.position.x);
+    const dz = Math.abs(this.playerZ - this.bossGroup.position.z);
+    if (dx < 3.2 && dz < 4.8 && this.bossActive) {
+      if (this.bossRamCooldown <= 0) {
+        this.bossRamCooldown = 0.5;
+        soundManager.playCrash(2.0);
+        this.cameraShakeIntensity = 0.85;
+        this.damageBoss(70);
+        this.damagePlayer(45);
+        this.currentSpeed = Math.max(15, this.currentSpeed * 0.6);
+        this.spawnSparks(new THREE.Vector3(this.playerX, 1.0, this.playerZ + 2.5), 20);
+      }
+    }
+    if (this.bossRamCooldown > 0) {
+      this.bossRamCooldown -= dt;
     }
   }
 
@@ -1140,42 +1235,154 @@ export class RoadWarsEngine {
     });
   }
 
-  private spawnSparks(pos: THREE.Vector3) {
-    for (let i = 0; i < 6; i++) {
-      const p = new THREE.Mesh(new THREE.SphereGeometry(0.08, 4, 4), new THREE.MeshBasicMaterial({ color: 0xfef08a }));
-      p.position.copy(pos);
-      this.scene.add(p);
-
-      this.particles.push({
-        mesh: p,
-        velocity: new THREE.Vector3((Math.random() - 0.5) * 15, Math.random() * 10, (Math.random() - 0.5) * 15),
-        lifetime: 0,
-        maxLifetime: 0.3,
-        fade: true,
-      });
-    }
-  }
-
-  private spawnExplosion(pos: THREE.Vector3, isLarge: boolean) {
-    const count = isLarge ? 28 : 12;
+  private spawnSparks(pos: THREE.Vector3, count: number = 8) {
     for (let i = 0; i < count; i++) {
-      const colors = [0xef4444, 0xf97316, 0xf59e0b, 0x1f2937];
-      const p = new THREE.Mesh(
-        new THREE.SphereGeometry(isLarge ? 0.35 : 0.18, 5, 5),
-        new THREE.MeshBasicMaterial({ color: colors[i % colors.length] })
-      );
+      const p = new THREE.Mesh(new THREE.SphereGeometry(0.09, 4, 4), new THREE.MeshBasicMaterial({ color: 0xfef08a }));
       p.position.copy(pos);
       this.scene.add(p);
 
       this.particles.push({
         mesh: p,
         velocity: new THREE.Vector3(
-          (Math.random() - 0.5) * (isLarge ? 28 : 16),
-          Math.random() * (isLarge ? 22 : 12),
-          (Math.random() - 0.5) * (isLarge ? 28 : 16)
+          (Math.random() - 0.5) * 18,
+          Math.random() * 12 + 2,
+          (Math.random() - 0.5) * 18
         ),
         lifetime: 0,
-        maxLifetime: isLarge ? 0.8 : 0.45,
+        maxLifetime: 0.35,
+        gravity: 20,
+        fade: true,
+      });
+    }
+  }
+
+  private spawnExplosion(pos: THREE.Vector3, isLarge: boolean) {
+    // 1. Blinding blast light flash
+    const blastLight = new THREE.PointLight(0xf97316, isLarge ? 6.0 : 3.8, isLarge ? 36 : 22);
+    blastLight.position.set(pos.x, pos.y + 1.5, pos.z);
+    this.scene.add(blastLight);
+    setTimeout(() => this.scene.remove(blastLight), 120);
+
+    // 2. Expanding central fireball
+    const fireballGeo = new THREE.SphereGeometry(isLarge ? 1.6 : 1.0, 10, 10);
+    const fireballMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const fireball = new THREE.Mesh(fireballGeo, fireballMat);
+    fireball.position.copy(pos);
+    this.scene.add(fireball);
+
+    this.particles.push({
+      mesh: fireball,
+      velocity: new THREE.Vector3(0, 1.6, 0),
+      lifetime: 0,
+      maxLifetime: isLarge ? 0.45 : 0.32,
+      fade: true,
+      scaleSpeed: isLarge ? 9.5 : 6.5,
+    });
+
+    // 3. Ground Shockwave Ring
+    const ringGeo = new THREE.RingGeometry(isLarge ? 1.2 : 0.8, isLarge ? 2.2 : 1.5, 24);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const shockwave = new THREE.Mesh(ringGeo, ringMat);
+    shockwave.position.set(pos.x, 0.08, pos.z);
+    this.scene.add(shockwave);
+
+    this.particles.push({
+      mesh: shockwave,
+      velocity: new THREE.Vector3(0, 0, 0),
+      lifetime: 0,
+      maxLifetime: 0.42,
+      fade: true,
+      scaleSpeed: isLarge ? 20.0 : 13.0,
+    });
+
+    // 4. Ejected Vehicle Wheels & Tires bouncing away
+    const wheelCount = isLarge ? 4 : 2;
+    for (let w = 0; w < wheelCount; w++) {
+      const tireGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.28, 8);
+      tireGeo.rotateZ(Math.PI / 2);
+      const tire = new THREE.Mesh(
+        tireGeo,
+        new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 })
+      );
+      tire.position.set(pos.x + (Math.random() - 0.5) * 1.2, 0.6, pos.z + (Math.random() - 0.5) * 1.2);
+      this.scene.add(tire);
+
+      const angle = (w * Math.PI * 2) / wheelCount + (Math.random() - 0.5) * 0.5;
+      const speed = isLarge ? 22 + Math.random() * 14 : 14 + Math.random() * 10;
+      this.particles.push({
+        mesh: tire,
+        velocity: new THREE.Vector3(Math.cos(angle) * speed, 9 + Math.random() * 9, Math.sin(angle) * speed),
+        lifetime: 0,
+        maxLifetime: 1.6,
+        gravity: 24,
+        rotationSpeed: new THREE.Vector3(Math.random() * 15, Math.random() * 15, Math.random() * 15),
+      });
+    }
+
+    // 5. Flying Charred Vehicle Metal Debris / Shrapnel
+    const shrapnelCount = isLarge ? 32 : 18;
+    for (let s = 0; s < shrapnelCount; s++) {
+      const wSize = 0.2 + Math.random() * 0.4;
+      const hSize = 0.1 + Math.random() * 0.25;
+      const dSize = 0.3 + Math.random() * 0.6;
+      const scrapMat = new THREE.MeshStandardMaterial({
+        color: Math.random() > 0.4 ? 0x18181b : 0xd97706,
+        roughness: 0.7,
+        metalness: 0.6,
+      });
+      const scrap = new THREE.Mesh(new THREE.BoxGeometry(wSize, hSize, dSize), scrapMat);
+      scrap.position.copy(pos);
+      this.scene.add(scrap);
+
+      this.particles.push({
+        mesh: scrap,
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * (isLarge ? 36 : 22),
+          6 + Math.random() * (isLarge ? 22 : 14),
+          (Math.random() - 0.5) * (isLarge ? 36 : 22)
+        ),
+        lifetime: 0,
+        maxLifetime: 1.2 + Math.random() * 0.6,
+        gravity: 28,
+        rotationSpeed: new THREE.Vector3(
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20
+        ),
+      });
+    }
+
+    // 6. High-heat fire sparks & billowing smoke puffs
+    const sparkCount = isLarge ? 24 : 14;
+    for (let i = 0; i < sparkCount; i++) {
+      const sparkColor = Math.random() > 0.5 ? 0xf97316 : 0xfacc15;
+      const spark = new THREE.Mesh(
+        new THREE.SphereGeometry(isLarge ? 0.22 : 0.14, 5, 5),
+        new THREE.MeshBasicMaterial({ color: sparkColor, transparent: true, opacity: 0.9 })
+      );
+      spark.position.copy(pos);
+      this.scene.add(spark);
+
+      this.particles.push({
+        mesh: spark,
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * (isLarge ? 24 : 15),
+          4 + Math.random() * (isLarge ? 18 : 10),
+          (Math.random() - 0.5) * (isLarge ? 24 : 15)
+        ),
+        lifetime: 0,
+        maxLifetime: 0.7 + Math.random() * 0.4,
+        gravity: 14,
         fade: true,
       });
     }
@@ -1185,7 +1392,37 @@ export class RoadWarsEngine {
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.lifetime += dt;
+
+      if (p.gravity) {
+        p.velocity.y -= p.gravity * dt;
+      }
       p.mesh.position.addScaledVector(p.velocity, dt);
+
+      // Bounce off ground
+      if (p.mesh.position.y < 0.15 && p.gravity) {
+        p.mesh.position.y = 0.15;
+        p.velocity.y = Math.max(0, -p.velocity.y * 0.45);
+        p.velocity.x *= 0.8;
+        p.velocity.z *= 0.8;
+      }
+
+      if (p.rotationSpeed) {
+        p.mesh.rotation.x += p.rotationSpeed.x * dt;
+        p.mesh.rotation.y += p.rotationSpeed.y * dt;
+        p.mesh.rotation.z += p.rotationSpeed.z * dt;
+      }
+
+      if (p.scaleSpeed) {
+        const newScale = Math.max(0.01, p.mesh.scale.x + p.scaleSpeed * dt);
+        p.mesh.scale.set(newScale, newScale, newScale);
+      }
+
+      if (p.fade && p.mesh.material) {
+        const mat = p.mesh.material as THREE.Material & { opacity?: number };
+        if (mat.opacity !== undefined) {
+          mat.opacity = Math.max(0, 1 - p.lifetime / p.maxLifetime);
+        }
+      }
 
       if (p.lifetime >= p.maxLifetime) {
         this.scene.remove(p.mesh);

@@ -293,6 +293,54 @@ class SoundManager {
     osc.stop(now + 0.08);
   }
 
+  public playCrash(intensity: number = 1.0) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+
+    const now = this.ctx.currentTime;
+    const duration = 0.35;
+
+    // Heavy metallic crunch bass
+    const osc = this.ctx.createOscillator();
+    const oscGain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(140 * intensity, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + duration);
+
+    oscGain.gain.setValueAtTime(Math.min(0.8, 0.45 * intensity), now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + duration);
+
+    // Metal screech / scrap noise
+    const bufferSize = Math.floor(this.ctx.sampleRate * duration);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.4));
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(800, now);
+    filter.Q.setValueAtTime(2.5, now);
+
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(Math.min(0.7, 0.5 * intensity), now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    noise.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+
+    noise.start(now);
+  }
+
   public playNitro() {
     this.initContext();
     if (!this.ctx || !this.masterGain || this.isMuted) return;
