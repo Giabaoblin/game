@@ -1,0 +1,6 @@
+{
+  "name": "ROAD WARS 3D - Combat Racing & Game Design System",
+  "description": "3D combat racing game with vehicle upgrades, weapon arsenal, 20 mission campaigns, boss showdowns, and complete Game Design Document (GDD) system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
