@@ -471,7 +471,7 @@ export class RoadWarsEngine {
     this.camera.lookAt(new THREE.Vector3(this.playerX * 0.3, 1.2, this.playerZ + 12));
 
     // 3. Environment Update
-    this.envManager.update(this.playerZ);
+    this.envManager.update(this.playerZ, dt);
 
     // 4. Weapons & Combat Handling
     this.handleWeapons(dt);
